@@ -1,48 +1,101 @@
 <?php
 
-namespace App;
+namespace Alif\LaravelRabbitmq;
 
-use Exception;
+use Illuminate\Contracts\Container\Container;
+use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use Ramsey\Uuid\Uuid;
+use ReflectionException;
+use ReflectionMethod;
+use ReflectionNamedType;
+use RuntimeException;
+use Throwable;
 
 class Rabbit
 {
-    private array                $queues = [];
-    private ?string              $queue  = null;
-    private array                $events = [];
-    private AMQPStreamConnection $connection;
+    private ?AMQPStreamConnection $connection = null;
+    private ?AMQPChannel          $channel    = null;
+    private ?object               $handler    = null;
 
-    private array $params = [];
+    private string $queue;
+    private array  $queues;
+    private string $deadLetterQueue;
+    private int    $rpcTimeout;
+
+    private array  $params = [];
     private string $method;
-    private bool $isRpc = false;
-    private mixed $response;
+    private mixed  $response;
 
-    /**
-     * @throws Exception
-     */
-    public function __construct()
+    public function __construct(private readonly Container $container)
     {
-        $this->connection = new AMQPStreamConnection(
-                'localhost', // RabbitMQ server host
-                5672,        // RabbitMQ server port
-                'guest',     // RabbitMQ username
-                'guest'      // RabbitMQ password
-        );
-        $this->queues     = require __DIR__ . '/../config/queues.php';
-        $this->events     = require __DIR__ . '/../config/events.php';
-        $this->queue      = $this->queues['default'] ?? 'msgs';
+        $this->queue           = config('rabbitmq.default_queue', 'msgs');
+        $this->queues          = config('rabbitmq.queues', [$this->queue]);
+        $this->deadLetterQueue = config('rabbitmq.dead_letter_queue', 'dead_letter_queue');
+        $this->rpcTimeout      = (int) config('rabbitmq.rpc_timeout', 10);
     }
 
-    public function publish(string $method = null, array $params = []): void
+    public function __destruct()
+    {
+        $this->channel?->is_open() && $this->channel->close();
+        $this->connection?->isConnected() && $this->connection->close();
+    }
+
+    /**
+     * @throws \Exception
+     */
+    private function getConnection(): AMQPStreamConnection
+    {
+        if (!$this->connection || !$this->connection->isConnected()) {
+            $this->connection = new AMQPStreamConnection(
+                    config('rabbitmq.host', 'localhost'),
+                    (int) config('rabbitmq.port', 5672),
+                    config('rabbitmq.user', 'guest'),
+                    config('rabbitmq.password', 'guest')
+            );
+        }
+
+        return $this->connection;
+    }
+
+    /**
+     * @throws \Exception
+     */
+    private function getChannel(): AMQPChannel
+    {
+        if (!$this->channel || !$this->channel->is_open()) {
+            $this->channel = $this->getConnection()->channel();
+        }
+
+        return $this->channel;
+    }
+
+    private function getHandler(): object
+    {
+        if (!$this->handler) {
+            $handlerClass = config('rabbitmq.handler');
+
+            if (!$handlerClass) {
+                throw new RuntimeException(
+                        "No RabbitMQ handler configured. Set 'handler' in config/rabbitmq.php to your handler class."
+                );
+            }
+
+            $this->handler = $this->container->make($handlerClass);
+        }
+
+        return $this->handler;
+    }
+
+    public function publish(?string $method = null, array $params = []): void
     {
         $this->doPublish($method, $params, false);
     }
 
-    public function request(string $method = null, array $params = []): static
+    public function request(?string $method = null, array $params = []): static
     {
-        $this->isRpc = true;
         $this->method = $method;
         $this->params = $params;
         return $this;
@@ -56,17 +109,14 @@ class Rabbit
     }
 
     /**
-     * @throws Exception
+     * @throws \Exception
      */
-    private function doPublish(string $method, array $params, bool $isRpc): void
+    private function doPublish(?string $method, array $params, bool $isRpc): void
     {
-        $connection = $this->connection;
-        $channel = $connection->channel();
+        $channel = $this->getChannel();
         $channel->queue_declare($this->queue, false, true, false, false);
 
         $properties = [];
-        $correlationId = null;
-        $callbackQueue = null;
 
         if ($isRpc) {
             [$callbackQueue, ,] = $channel->queue_declare('', false, true, true, true);
@@ -92,47 +142,58 @@ class Rabbit
         $channel->basic_publish($message, '', $this->queue);
 
         if ($isRpc) {
-            while (!$this->response) {
-                $channel->wait();
+            try {
+                while (!$this->response) {
+                    $channel->wait(null, false, $this->rpcTimeout);
+                }
+            } catch (AMQPTimeoutException) {
+                throw new RuntimeException("RPC request '{$method}' timed out after {$this->rpcTimeout}s");
             }
         } else {
             echo "Message published to queue {$this->queue}\n";
         }
+    }
 
-        $channel->close();
-        $connection->close();
+    /**
+     * @throws ReflectionException
+     */
+    private function invokeHandler(string $method, array $params): mixed
+    {
+        $handler    = $this->getHandler();
+        $reflection = new ReflectionMethod($handler, $method);
+        $type       = $reflection->getParameters()[0]?->getType();
+
+        $argument = $params;
+        if ($type instanceof ReflectionNamedType && is_subclass_of($type->getName(), BaseDto::class)) {
+            $argument = $type->getName()::fromArray($params);
+        }
+
+        return $handler->$method($argument);
     }
 
     public function consume(): void
     {
-        $connection = $this->connection;
-        $channel    = $connection->channel();
+        $channel = $this->getChannel();
+        $handler = $this->getHandler();
 
-        $queues = $this->queues['queues'] ?? [$this->queue];
-
-        foreach ($queues as $queue) {
+        foreach ($this->queues as $queue) {
             $channel->queue_declare($queue, false, true, false, false);
 
-            $callback = function ($msg) use ($channel, $queue) {
+            $callback = function ($msg) use ($channel, $handler) {
                 $data   = json_decode($msg->body, true);
                 $method = $data['method'] ?? null;
                 $params = $data['params'] ?? [];
 
-                $event = $this->events[$method] ?? null;
-                if (!$event) {
+                if (!$method || !method_exists($handler, $method)) {
                     $msg->ack();
                     return;
                 }
 
-                $instance   = new $event['class']();
-                $callMethod = $event['method'] ?? null;
-                $dto        = $event['dto'] ?? null;
-
                 $isRpc = $msg->has('reply_to') && $msg->has('correlation_id');
 
                 try {
-                    $result = $instance->$callMethod($dto::fromArray($params));
-                } catch (Exception $exception) {
+                    $result = $this->invokeHandler($method, $params);
+                } catch (Throwable $exception) {
                     $errorPayload = [
                             'method' => $method,
                             'params' => $params,
@@ -147,11 +208,11 @@ class Rabbit
                     if ($isRpc) {
                         $result = $errorPayload;
                     } else {
-                        $channel->queue_declare($this->queues['dead_letter_queue'], false, true, false, false);
+                        $channel->queue_declare($this->deadLetterQueue, false, true, false, false);
                         $channel->basic_publish(
                                 new AMQPMessage(json_encode($errorPayload)),
                                 '',
-                                $this->queues['dead_letter_queue']
+                                $this->deadLetterQueue
                         );
                         $msg->ack();
                         return;
@@ -177,8 +238,5 @@ class Rabbit
         while ($channel->is_consuming()) {
             $channel->wait();
         }
-
-        $channel->close();
-        $connection->close();
     }
 }

@@ -1,9 +1,9 @@
 <?php
 
-namespace services;
+namespace App\Services;
 
-use services\dto\UserCreateDto;
-use services\dto\UserGetDto;
+use App\Rabbitmq\Dto\UserCreateDto;
+use App\Rabbitmq\Dto\UserGetDto;
 
 class UserService
 {

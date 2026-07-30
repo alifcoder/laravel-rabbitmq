@@ -1,8 +1,8 @@
 <?php
 
-namespace services\dto;
+namespace App\Rabbitmq\Dto;
 
-use App\BaseDto;
+use Alif\LaravelRabbitmq\BaseDto;
 
 class UserCreateDto extends BaseDto
 {
