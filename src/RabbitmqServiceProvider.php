@@ -3,7 +3,6 @@
 namespace Alif\LaravelRabbitmq;
 
 use Illuminate\Support\ServiceProvider;
-use Alif\LaravelRabbitmq\Console\Commands\ConsumeCommand;
 
 class RabbitmqServiceProvider extends ServiceProvider
 {
@@ -11,7 +10,7 @@ class RabbitmqServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/rabbitmq.php', 'rabbitmq');
 
-        $this->app->singleton(Rabbit::class, fn ($app) => new Rabbit($app));
+        $this->app->singleton(Client::class);
     }
 
     public function boot(): void
@@ -23,9 +22,5 @@ class RabbitmqServiceProvider extends ServiceProvider
         $this->publishes([
                 __DIR__ . '/../config/rabbitmq.php' => config_path('rabbitmq.php'),
         ], 'rabbitmq-config');
-
-        $this->commands([
-                ConsumeCommand::class,
-        ]);
     }
 }

@@ -26,85 +26,87 @@ php artisan vendor:publish --tag=rabbitmq-config
 | `password` | `RABBITMQ_PASSWORD` | `guest` |
 | `rpc_timeout` | `RABBITMQ_RPC_TIMEOUT` | `10` (seconds) |
 | `default_queue` | `RABBITMQ_DEFAULT_QUEUE` | `msgs` |
-| `queues` | — | `[default_queue]` — queues consumed by `rabbitmq:consume` |
-| `dead_letter_queue` | `RABBITMQ_DEAD_LETTER_QUEUE` | `dead_letter_queue` |
-| `handler` | — | `null` — your handler class, see below |
 
-## Defining a handler
+## What the package provides vs. what you write
 
-Every public method on your handler class is a dispatchable event: the message's `method` field
-is matched against the method name, and if the method's first parameter type-hints a `BaseDto`
-subclass, it's auto-hydrated from the message's `params`. The handler itself is resolved out of
-the container, so its constructor gets normal Laravel dependency injection.
+`Alif\LaravelRabbitmq\Client` is a thin, low-level primitive: connection/channel management,
+`publish()`, `request()->getResult()`, and a `consume(queue, callback)->wait()` pair where you get
+the raw `PhpAmqpLib\Message\AMQPMessage` and are responsible for acknowledging it yourself.
 
-```php
-// app/Rabbitmq/RabbitHandler.php
-namespace App\Rabbitmq;
-
-class RabbitHandler
-{
-    public function __construct(private readonly UserService $userService) {}
-
-    public function createUser(UserCreateDto $dto): void
-    {
-        $this->userService->create($dto);
-    }
-
-    public function getUser(UserGetDto $dto): array
-    {
-        return $this->userService->getUser($dto);
-    }
-}
-```
-
-```php
-// app/Rabbitmq/Dto/UserCreateDto.php
-namespace App\Rabbitmq\Dto;
-
-use Alif\LaravelRabbitmq\BaseDto;
-
-class UserCreateDto extends BaseDto
-{
-    public function __construct(
-        public string $email,
-        public string $name,
-    ) {}
-}
-```
-
-Point the config at it:
-
-```php
-// config/rabbitmq.php
-'handler' => \App\Rabbitmq\RabbitHandler::class,
-```
-
-A full working example (handler, DTOs, and the service they delegate to) is in [`examples/`](examples).
+There's no handler registry, method dispatch, or dead-letter routing built into the package —
+that's application logic, not library logic. [`examples/`](examples) shows one way to build it:
+a `RabbitHandler` class (dispatched to by method name, with `BaseDto` auto-hydrating typed
+parameters from the message `params`) plus a `RabbitConsume` command that wires it up, RPC replies
+included. Copy it into your project and adjust it to taste — see "Consuming" below.
 
 ## Usage
 
-### Publish (fire-and-forget)
+### `rabbit()` helper (recommended)
+
+```php
+// Publish (fire-and-forget)
+rabbit('createUser', ['email' => 'a@b.com', 'name' => 'Ada'])->publish();
+
+// RPC request (wait for a reply)
+$result = rabbit('getUser', ['id' => 5])->getResult();
+
+// Optionally target a queue other than `default_queue`
+rabbit('createUser', ['email' => 'a@b.com', 'name' => 'Ada'], queue: 'pos')->publish();
+```
+
+`rabbit(string $method, array $params = [], ?string $queue = null): Rabbit` returns a
+`Alif\LaravelRabbitmq\Rabbit` instance — call `->publish()` or `->getResult()` on it.
+
+### Facade
+
+The same operations are available on the `Rabbit` facade, which proxies the underlying
+`Alif\LaravelRabbitmq\Client` singleton directly:
 
 ```php
 use Alif\LaravelRabbitmq\Facades\Rabbit;
 
 Rabbit::publish(method: 'createUser', params: ['email' => 'a@b.com', 'name' => 'Ada']);
-```
 
-### RPC request (wait for a reply)
-
-```php
 $result = Rabbit::request(method: 'getUser', params: ['id' => 5])->getResult();
 ```
 
-Throws `RuntimeException` if no reply arrives within `rpc_timeout` seconds.
+Both throw `RuntimeException` if an RPC request gets no reply within `rpc_timeout` seconds.
 
 ### Consuming
 
-```bash
-php artisan rabbitmq:consume
+```php
+use Alif\LaravelRabbitmq\Client;
+use PhpAmqpLib\Message\AMQPMessage;
+
+$client->consume('erp', function (AMQPMessage $message) {
+    $message->ack();
+
+    $data = json_decode($message->getBody(), true);
+    // ... do something with $data['method'] / $data['params'] ...
+
+    // if the message was sent via request()->getResult(), reply to it:
+    if ($message->has('reply_to') && $message->has('correlation_id')) {
+        $message->getChannel()->basic_publish(
+            new AMQPMessage(json_encode($result), ['correlation_id' => $message->get('correlation_id')]),
+            '',
+            $message->get('reply_to')
+        );
+    }
+})->wait();
 ```
 
-Consumes every queue listed in `queues`, dispatching each message to the configured `handler`.
-Unhandled exceptions in the handler are caught: for RPC messages the error is returned to the
-caller, for plain messages it's routed to `dead_letter_queue`.
+- You choose the queue per call — nothing is read from `config('rabbitmq.queues')`.
+- You ack (or nack/reject) the message yourself; the package won't do it for you.
+- `wait()` blocks and runs the consume loop; call it once after registering every `consume()` callback you need.
+
+[`examples/Console/Commands/RabbitConsume.php`](examples/Console/Commands/RabbitConsume.php) wraps
+this in a full `rabbit:consume` artisan command — method/DTO dispatch to a `RabbitHandler`, RPC
+replies, and per-message error handling included. Copy it into your project:
+
+```bash
+cp vendor/alifcoder/laravel-rabbitmq/examples/Console/Commands/RabbitConsume.php app/Console/Commands/
+cp vendor/alifcoder/laravel-rabbitmq/examples/RabbitHandler.php app/Rabbitmq/RabbitHandler.php
+```
+
+Laravel auto-discovers commands under `app/Console/Commands/`, so `php artisan rabbit:consume`
+works immediately once it's there — no registration needed.

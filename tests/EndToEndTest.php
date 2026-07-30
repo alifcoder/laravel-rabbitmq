@@ -2,15 +2,15 @@
 
 namespace Alif\LaravelRabbitmq\Tests;
 
-use App\Rabbitmq\RabbitHandler;
+use App\Console\Commands\RabbitConsume;
 use Alif\LaravelRabbitmq\Facades\Rabbit;
-use Alif\LaravelRabbitmq\Rabbit as RabbitService;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 
 require_once __DIR__ . '/../examples/UserService.php';
 require_once __DIR__ . '/../examples/dto/UserCreateDto.php';
 require_once __DIR__ . '/../examples/dto/UserGetDto.php';
 require_once __DIR__ . '/../examples/RabbitHandler.php';
+require_once __DIR__ . '/../examples/Console/Commands/RabbitConsume.php';
 
 class EndToEndTest extends TestCase
 {
@@ -31,9 +31,7 @@ class EndToEndTest extends TestCase
 
     protected function defineEnvironment($app): void
     {
-        $app['config']->set('rabbitmq.handler', RabbitHandler::class);
         $app['config']->set('rabbitmq.default_queue', self::QUEUE);
-        $app['config']->set('rabbitmq.queues', [self::QUEUE]);
     }
 
     public function test_publish_is_consumed_and_dispatched_via_the_container(): void
@@ -63,6 +61,33 @@ class EndToEndTest extends TestCase
         $this->assertSame(['id' => '5', 'name' => 'John Doe', 'email' => 'test@mail.com'], $result);
     }
 
+    public function test_rabbit_helper_publish_is_consumed(): void
+    {
+        $pid = $this->forkConsumer();
+
+        usleep(300_000);
+        rabbit('createUser', ['email' => 'a@b.com', 'name' => 'Ada'], self::QUEUE)->publish();
+        usleep(500_000);
+
+        $this->stopConsumer($pid);
+
+        $this->assertSame(0, $this->queueMessageCount(), 'Published message was not picked up by the consumer.');
+    }
+
+    public function test_rabbit_helper_rpc_request_round_trips(): void
+    {
+        $pid = $this->forkConsumer();
+        usleep(300_000);
+
+        try {
+            $result = rabbit('getUser', ['id' => '5'], self::QUEUE)->getResult();
+        } finally {
+            $this->stopConsumer($pid);
+        }
+
+        $this->assertSame(['id' => '5', 'name' => 'John Doe', 'email' => 'test@mail.com'], $result);
+    }
+
     private function forkConsumer(): int
     {
         $pid = pcntl_fork();
@@ -72,7 +97,7 @@ class EndToEndTest extends TestCase
         }
 
         if ($pid === 0) {
-            $this->app->make(RabbitService::class)->consume();
+            $this->app->call([new RabbitConsume(), 'handle']);
             exit(0);
         }
 

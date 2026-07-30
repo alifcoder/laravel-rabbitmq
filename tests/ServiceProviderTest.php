@@ -2,8 +2,8 @@
 
 namespace Alif\LaravelRabbitmq\Tests;
 
+use Alif\LaravelRabbitmq\Client;
 use Alif\LaravelRabbitmq\Facades\Rabbit as RabbitFacade;
-use Alif\LaravelRabbitmq\Rabbit;
 
 class ServiceProviderTest extends TestCase
 {
@@ -15,20 +15,14 @@ class ServiceProviderTest extends TestCase
         $this->assertSame(10, config('rabbitmq.rpc_timeout'));
     }
 
-    public function test_rabbit_is_bound_as_a_singleton(): void
+    public function test_client_is_bound_as_a_singleton(): void
     {
-        $this->assertSame($this->app->make(Rabbit::class), $this->app->make(Rabbit::class));
+        $this->assertSame($this->app->make(Client::class), $this->app->make(Client::class));
     }
 
     public function test_facade_resolves_to_the_bound_singleton(): void
     {
-        $this->assertSame($this->app->make(Rabbit::class), RabbitFacade::getFacadeRoot());
-    }
-
-    public function test_consume_command_is_registered(): void
-    {
-        $this->artisan('list')->assertSuccessful();
-        $this->assertTrue($this->app->make(\Illuminate\Contracts\Console\Kernel::class)->all()['rabbitmq:consume'] !== null);
+        $this->assertSame($this->app->make(Client::class), RabbitFacade::getFacadeRoot());
     }
 
     public function test_config_publishes_to_the_app_config_path(): void
