@@ -37,13 +37,12 @@ class RabbitHandler
             throw new InvalidArgumentException("Unknown method: {$method}");
         }
 
-        $type     = (new ReflectionMethod($this, $method))->getParameters()[0]?->getType();
-        $argument = $params;
+        $type = (new ReflectionMethod($this, $method))->getParameters()[0]?->getType();
 
-        if ($type instanceof ReflectionNamedType && is_subclass_of($type->getName(), BaseDto::class)) {
-            $argument = $type->getName()::fromArray($params);
+        if (!$type instanceof ReflectionNamedType || !is_subclass_of($type->getName(), BaseDto::class)) {
+            throw new InvalidArgumentException("Method {$method} must type-hint a BaseDto parameter");
         }
 
-        return $this->$method($argument);
+        return $this->$method($type->getName()::fromArray($params));
     }
 }
