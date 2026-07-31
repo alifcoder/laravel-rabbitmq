@@ -4,6 +4,7 @@ namespace Alif\LaravelRabbitmq;
 
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Exception\AMQPProtocolChannelException;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
@@ -22,6 +23,9 @@ class Client
     private string  $method;
     private ?string $requestQueue = null;
     private mixed   $response;
+
+    /** Queues already confirmed/declared this connection, keyed by queue name. */
+    private array $declaredQueues = [];
 
     public function __construct()
     {
@@ -89,9 +93,9 @@ class Client
      */
     private function doPublish(?string $method, array $params, bool $isRpc, ?string $queue = null): void
     {
-        $queue   = $queue ?? $this->queue;
+        $queue = $queue ?? $this->queue;
+        $this->declareQueueWithDeadLetter($queue);
         $channel = $this->getChannel();
-        $this->declareQueueWithDeadLetter($channel, $queue);
 
         $properties   = [];
         $consumerTag  = null;
@@ -148,8 +152,8 @@ class Client
      */
     public function consume(string $queue, callable $callback): static
     {
+        $this->declareQueueWithDeadLetter($queue);
         $channel = $this->getChannel();
-        $this->declareQueueWithDeadLetter($channel, $queue);
         $channel->basic_qos(0, 1, false);
         $channel->basic_consume($queue, '', false, false, false, false, $callback);
 
@@ -180,9 +184,21 @@ class Client
     /**
      * Declares $queue with a dead-letter-exchange argument, plus the
      * exchange and dead-letter queue it routes rejected messages into.
+     *
+     * Queue arguments are immutable once a queue exists, so a queue created
+     * before this feature (or with different arguments) is left untouched
+     * rather than crashing the whole connection with a channel-closing
+     * PRECONDITION_FAILED — it simply won't dead-letter until it's manually
+     * deleted/recreated (or migrated via a RabbitMQ policy).
      */
-    private function declareQueueWithDeadLetter(AMQPChannel $channel, string $queue): void
+    private function declareQueueWithDeadLetter(string $queue): void
     {
+        if (isset($this->declaredQueues[$queue]) || $this->queueExists($queue)) {
+            $this->declaredQueues[$queue] = true;
+            return;
+        }
+
+        $channel         = $this->getChannel();
         $exchange        = config('rabbitmq.dead_letter_exchange', 'dlx');
         $deadLetterQueue = $this->deadLetterQueueName($queue);
 
@@ -194,6 +210,29 @@ class Client
                 'x-dead-letter-exchange'    => $exchange,
                 'x-dead-letter-routing-key' => $queue,
         ]));
+
+        $this->declaredQueues[$queue] = true;
+    }
+
+    /**
+     * Passively checks whether $queue already exists, without asserting any
+     * arguments on it. A passive queue_declare that fails closes the
+     * channel per the AMQP protocol, so getChannel() is forced to open a
+     * fresh one afterward.
+     */
+    private function queueExists(string $queue): bool
+    {
+        try {
+            $this->getChannel()->queue_declare($queue, true, true, false, false);
+            return true;
+        } catch (AMQPProtocolChannelException $exception) {
+            if ($exception->amqp_reply_code === 404) {
+                $this->channel = null;
+                return false;
+            }
+
+            throw $exception;
+        }
     }
 
     public function wait(): void
