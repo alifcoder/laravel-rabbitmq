@@ -92,7 +92,8 @@ class Client
         $channel = $this->getChannel();
         $channel->queue_declare($queue, false, true, false, false);
 
-        $properties = [];
+        $properties   = [];
+        $consumerTag  = null;
 
         if ($isRpc) {
             [$callbackQueue, ,] = $channel->queue_declare('', false, true, true, true);
@@ -103,7 +104,7 @@ class Client
                     'reply_to'       => $callbackQueue,
             ];
 
-            $channel->basic_consume($callbackQueue, '', false, true, false, false, function ($msg) use ($correlationId) {
+            $consumerTag = $channel->basic_consume($callbackQueue, '', false, true, false, false, function ($msg) use ($correlationId) {
                 if ($msg->get('correlation_id') === $correlationId) {
                     $this->response = json_decode($msg->body, true);
                 }
@@ -124,6 +125,8 @@ class Client
                 }
             } catch (AMQPTimeoutException) {
                 throw new RuntimeException("RPC request '{$method}' timed out after {$this->rpcTimeout}s");
+            } finally {
+                $channel->basic_cancel($consumerTag);
             }
         } else {
             echo "Message published to queue {$queue}\n";

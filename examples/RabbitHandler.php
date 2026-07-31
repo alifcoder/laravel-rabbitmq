@@ -1,11 +1,10 @@
 <?php
 
-namespace App\Rabbitmq;
+namespace Alif\LaravelRabbitmq\Examples;
 
 use Alif\LaravelRabbitmq\BaseDto;
-use App\Rabbitmq\Dto\UserCreateDto;
-use App\Rabbitmq\Dto\UserGetDto;
-use App\Services\UserService;
+use Alif\LaravelRabbitmq\Examples\Dto\UserCreateDto;
+use Alif\LaravelRabbitmq\Examples\Dto\UserGetDto;
 use InvalidArgumentException;
 use ReflectionMethod;
 use ReflectionNamedType;

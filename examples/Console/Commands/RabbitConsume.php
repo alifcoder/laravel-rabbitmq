@@ -1,9 +1,9 @@
 <?php
 
-namespace App\Console\Commands;
+namespace Alif\LaravelRabbitmq\Examples\Console\Commands;
 
 use Alif\LaravelRabbitmq\Client;
-use App\Rabbitmq\RabbitHandler;
+use Alif\LaravelRabbitmq\Examples\RabbitHandler;
 use Illuminate\Console\Command;
 use PhpAmqpLib\Message\AMQPMessage;
 use Throwable;

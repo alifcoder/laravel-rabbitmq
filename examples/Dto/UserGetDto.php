@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Rabbitmq\Dto;
+namespace Alif\LaravelRabbitmq\Examples\Dto;
 
 use Alif\LaravelRabbitmq\BaseDto;
 

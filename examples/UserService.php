@@ -1,9 +1,9 @@
 <?php
 
-namespace App\Services;
+namespace Alif\LaravelRabbitmq\Examples;
 
-use App\Rabbitmq\Dto\UserCreateDto;
-use App\Rabbitmq\Dto\UserGetDto;
+use Alif\LaravelRabbitmq\Examples\Dto\UserCreateDto;
+use Alif\LaravelRabbitmq\Examples\Dto\UserGetDto;
 
 class UserService
 {
