@@ -2,13 +2,13 @@
 
 namespace Alif\LaravelRabbitmq\Tests;
 
-use App\Console\Commands\RabbitConsume;
+use Alif\LaravelRabbitmq\Examples\Console\Commands\RabbitConsume;
 use Alif\LaravelRabbitmq\Facades\Rabbit;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 
 require_once __DIR__ . '/../examples/UserService.php';
-require_once __DIR__ . '/../examples/dto/UserCreateDto.php';
-require_once __DIR__ . '/../examples/dto/UserGetDto.php';
+require_once __DIR__ . '/../examples/Dto/UserCreateDto.php';
+require_once __DIR__ . '/../examples/Dto/UserGetDto.php';
 require_once __DIR__ . '/../examples/RabbitHandler.php';
 require_once __DIR__ . '/../examples/Console/Commands/RabbitConsume.php';
 

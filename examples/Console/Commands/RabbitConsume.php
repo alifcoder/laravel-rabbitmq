@@ -30,14 +30,16 @@ class RabbitConsume extends Command
     public function handle(Client $client, RabbitHandler $handler): void
     {
         $client->consume(config('rabbitmq.default_queue'), function (AMQPMessage $message) use ($handler) {
-            $message->ack();
-
             $data = json_decode($message->getBody(), true);
 
             try {
                 $result = $handler->handle($data['method'] ?? '', $data['params'] ?? []);
+                $message->ack();
             } catch (Throwable $exception) {
+                // Reply with the error immediately, but also dead-letter the
+                // original message (msgs.dlq) so failures stay inspectable.
                 $result = ['error' => $exception->getMessage()];
+                $message->nack(false);
             }
 
             if ($message->has('reply_to') && $message->has('correlation_id')) {

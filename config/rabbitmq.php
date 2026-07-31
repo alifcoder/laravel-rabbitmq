@@ -17,4 +17,16 @@ return [
      */
     'default_queue' => env('RABBITMQ_DEFAULT_QUEUE', 'msgs'),
 
+    /*
+     * Exchange that consume()-declared queues dead-letter into when a
+     * message is nacked/rejected without requeue, or expires via TTL.
+     */
+    'dead_letter_exchange' => env('RABBITMQ_DEAD_LETTER_EXCHANGE', 'dlx'),
+
+    /*
+     * Suffix appended to a queue's name to derive its dead-letter queue,
+     * e.g. "msgs" -> "msgs.dlq".
+     */
+    'dead_letter_queue_suffix' => env('RABBITMQ_DEAD_LETTER_QUEUE_SUFFIX', '.dlq'),
+
 ];

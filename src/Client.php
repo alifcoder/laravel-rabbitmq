@@ -6,6 +6,7 @@ use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
+use PhpAmqpLib\Wire\AMQPTable;
 use Ramsey\Uuid\Uuid;
 use RuntimeException;
 
@@ -90,7 +91,7 @@ class Client
     {
         $queue   = $queue ?? $this->queue;
         $channel = $this->getChannel();
-        $channel->queue_declare($queue, false, true, false, false);
+        $this->declareQueueWithDeadLetter($channel, $queue);
 
         $properties   = [];
         $consumerTag  = null;
@@ -138,16 +139,61 @@ class Client
      * The callback is responsible for acknowledging the message. Call wait()
      * afterwards to start the blocking consume loop.
      *
+     * $queue is declared with a dead-letter-exchange, so a message the
+     * callback rejects with nack(requeue: false)/reject(requeue: false),
+     * or that expires via a per-message/queue TTL, lands on the queue's
+     * dead-letter queue (see deadLetterQueueName()) instead of vanishing.
+     *
      * @throws \Exception
      */
     public function consume(string $queue, callable $callback): static
     {
         $channel = $this->getChannel();
-        $channel->queue_declare($queue, false, true, false, false);
+        $this->declareQueueWithDeadLetter($channel, $queue);
         $channel->basic_qos(0, 1, false);
         $channel->basic_consume($queue, '', false, false, false, false, $callback);
 
         return $this;
+    }
+
+    /**
+     * Consume the dead-letter queue for $queue, i.e. messages that were
+     * nacked/rejected without requeue (or expired) off of $queue.
+     *
+     * @throws \Exception
+     */
+    public function consumeDeadLetters(string $queue, callable $callback): static
+    {
+        $channel = $this->getChannel();
+        $channel->queue_declare($this->deadLetterQueueName($queue), false, true, false, false);
+        $channel->basic_qos(0, 1, false);
+        $channel->basic_consume($this->deadLetterQueueName($queue), '', false, false, false, false, $callback);
+
+        return $this;
+    }
+
+    public function deadLetterQueueName(string $queue): string
+    {
+        return $queue . config('rabbitmq.dead_letter_queue_suffix', '.dlq');
+    }
+
+    /**
+     * Declares $queue with a dead-letter-exchange argument, plus the
+     * exchange and dead-letter queue it routes rejected messages into.
+     */
+    private function declareQueueWithDeadLetter(AMQPChannel $channel, string $queue): void
+    {
+        $exchange        = config('rabbitmq.dead_letter_exchange', 'dlx');
+        $deadLetterQueue = $this->deadLetterQueueName($queue);
+
+        $channel->exchange_declare($exchange, 'direct', false, true, false);
+        $channel->queue_declare($deadLetterQueue, false, true, false, false);
+        $channel->queue_bind($deadLetterQueue, $exchange, $queue);
+
+        $channel->queue_declare($queue, false, true, false, false, false, new AMQPTable([
+                'x-dead-letter-exchange'    => $exchange,
+                'x-dead-letter-routing-key' => $queue,
+        ]));
     }
 
     public function wait(): void
