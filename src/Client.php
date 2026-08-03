@@ -148,6 +148,12 @@ class Client
      * or that expires via a per-message/queue TTL, lands on the queue's
      * dead-letter queue (see deadLetterQueueName()) instead of vanishing.
      *
+     * If $callback throws instead of handling the error itself, the
+     * exception is caught here, its message/file/line are attached to the
+     * payload landed on the queue's dead-letter queue (see
+     * deadLetterQueueName()), and it's reported via report() — instead of
+     * crashing the whole consume loop and leaving the message stuck unacked.
+     *
      * @throws \Exception
      */
     public function consume(string $queue, callable $callback): static
@@ -155,9 +161,42 @@ class Client
         $this->declareQueueWithDeadLetter($queue);
         $channel = $this->getChannel();
         $channel->basic_qos(0, 1, false);
-        $channel->basic_consume($queue, '', false, false, false, false, $callback);
+        $channel->basic_consume($queue, '', false, false, false, false, function (AMQPMessage $message) use ($queue, $callback) {
+            try {
+                $callback($message);
+            } catch (\Throwable $exception) {
+                $this->deadLetter($queue, $message, $exception);
+                report($exception);
+            }
+        });
 
         return $this;
+    }
+
+    /**
+     * Publishes $message onto $queue's dead-letter queue with the causing
+     * exception's message/file/line attached, then acks the original off
+     * $queue. Used instead of a plain nack() so the reason a message failed
+     * is visible right on the dead-lettered payload, not just in the logs.
+     */
+    private function deadLetter(string $queue, AMQPMessage $message, \Throwable $exception): void
+    {
+        $decoded = json_decode($message->getBody(), true);
+        $payload = is_array($decoded) ? $decoded : ['body' => $message->getBody()];
+
+        $payload['error'] = [
+                'message' => $exception->getMessage(),
+                'file'    => $exception->getFile(),
+                'line'    => $exception->getLine(),
+        ];
+
+        $this->getChannel()->basic_publish(
+                new AMQPMessage(json_encode($payload), $message->get_properties()),
+                '',
+                $this->deadLetterQueueName($queue)
+        );
+
+        $message->ack();
     }
 
     /**
