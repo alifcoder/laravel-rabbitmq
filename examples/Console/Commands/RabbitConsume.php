@@ -34,13 +34,23 @@ class RabbitConsume extends Command
 
             try {
                 $result = $handler->handle($data['method'] ?? '', $data['params'] ?? []);
-                $message->ack();
             } catch (Throwable $exception) {
-                // Reply with the error immediately, but also dead-letter the
-                // original message (msgs.dlq) so failures stay inspectable.
-                $result = ['error' => $exception->getMessage()];
-                $message->nack(false);
+                // Reply with the error immediately, then rethrow so Client::consume()
+                // dead-letters the message itself (adds method/params/error to msgs.dlq)
+                // instead of us nacking here and letting RabbitMQ's native
+                // x-dead-letter-exchange republish the raw, unannotated message.
+                if ($message->has('reply_to') && $message->has('correlation_id')) {
+                    $message->getChannel()->basic_publish(
+                            new AMQPMessage(json_encode(['error' => $exception->getMessage()]), ['correlation_id' => $message->get('correlation_id')]),
+                            '',
+                            $message->get('reply_to')
+                    );
+                }
+
+                throw $exception;
             }
+
+            $message->ack();
 
             if ($message->has('reply_to') && $message->has('correlation_id')) {
                 $message->getChannel()->basic_publish(

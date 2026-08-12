@@ -175,9 +175,9 @@ class Client
 
     /**
      * Publishes $message onto $queue's dead-letter queue with the causing
-     * exception's message attached, then acks the original off $queue.
-     * Used instead of a plain nack() so the reason a message failed is
-     * visible right on the dead-lettered payload, not just in the logs.
+     * exception's message/file/line attached, then acks the original off
+     * $queue. Used instead of a plain nack() so the reason a message failed
+     * is visible right on the dead-lettered payload, not just in the logs.
      */
     private function deadLetter(string $queue, AMQPMessage $message, \Throwable $exception): void
     {
@@ -187,7 +187,11 @@ class Client
         $payload = [
                 'method' => $decoded['method'] ?? null,
                 'params' => $decoded['params'] ?? [],
-                'error'  => $exception->getMessage(),
+                'error'  => [
+                        'message' => $exception->getMessage(),
+                        'file'    => $exception->getFile(),
+                        'line'    => $exception->getLine(),
+                ],
         ];
 
         $this->getChannel()->basic_publish(
