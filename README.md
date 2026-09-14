@@ -39,6 +39,30 @@ a `RabbitHandler` class (dispatched to by method name, with `BaseDto` auto-hydra
 parameters from the message `params`) plus a `RabbitConsume` command that wires it up, RPC replies
 included. Copy it into your project and adjust it to taste — see "Consuming" below.
 
+`BaseDto` subclasses can optionally declare a static `rules()` method returning Laravel validation
+rules (same format as `Validator::make()` / form requests). When present, `fromArray()` validates
+the raw `params` against it before hydrating the DTO and throws
+`Illuminate\Validation\ValidationException` on failure:
+
+```php
+class UserCreateDto extends BaseDto
+{
+    public function __construct(
+        public string $email,
+        public string $name
+    ) {
+    }
+
+    public static function rules(): array
+    {
+        return [
+            'email' => ['required', 'email'],
+            'name' => ['required', 'string', 'max:255'],
+        ];
+    }
+}
+```
+
 ## Usage
 
 ### `rabbit()` helper (recommended)

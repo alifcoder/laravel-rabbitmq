@@ -11,4 +11,12 @@ class UserCreateDto extends BaseDto
             public string $name
     ) {
     }
+
+    public static function rules(): array
+    {
+        return [
+            'email' => ['required', 'email'],
+            'name' => ['required', 'string', 'max:255'],
+        ];
+    }
 }

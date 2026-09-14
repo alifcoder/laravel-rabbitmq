@@ -10,4 +10,11 @@ class UserGetDto extends BaseDto
         public string $id
     ) {
     }
+
+    public static function rules(): array
+    {
+        return [
+            'id' => ['required', 'string'],
+        ];
+    }
 }
