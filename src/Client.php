@@ -48,7 +48,7 @@ class Client
             $this->connection = new AMQPStreamConnection(
                     config('rabbitmq.host', 'localhost'),
                     (int) config('rabbitmq.port', 5672),
-                    config('rabbitmq.user', 'guest'),
+                    config('rabbitmq.username', 'guest'),
                     config('rabbitmq.password', 'guest')
             );
         }
