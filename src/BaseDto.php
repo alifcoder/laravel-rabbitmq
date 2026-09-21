@@ -10,6 +10,11 @@ use ReflectionException;
 
 class BaseDto
 {
+    public ?string $paginate = null;
+    public ?string $page = null;
+    public ?string $per_page = null;
+    public ?array $search = null;
+
     /**
      * Laravel validation rules keyed by field name, checked against the raw
      * $data array in fromArray() before it's hydrated into the DTO. Override
@@ -38,7 +43,7 @@ class BaseDto
         $reflection = new ReflectionClass(static::class);
         $params = [];
 
-        foreach ($reflection->getConstructor()->getParameters() as $param) {
+        foreach ($reflection->getConstructor()?->getParameters() ?? [] as $param) {
             $name = $param->getName();
 
             if (array_key_exists($name, $data)) {
@@ -54,6 +59,29 @@ class BaseDto
             }
         }
 
-        return new static(...$params);
+        $dto = new static(...$params);
+
+        // Subclasses declare their own constructors, so the shared fields are
+        // hydrated here rather than through the constructor.
+        foreach (['paginate', 'page', 'per_page', 'search'] as $field) {
+            if (array_key_exists($field, $data)) {
+                $dto->{$field} = $data[$field];
+            }
+        }
+
+        return $dto;
+    }
+
+    /**
+     * The default pagination / search fields shared by every DTO.
+     */
+    public function toArray(): array
+    {
+        return [
+            'paginate' => $this->paginate,
+            'page' => $this->page,
+            'per_page' => $this->per_page,
+            'search' => $this->search,
+        ];
     }
 }
