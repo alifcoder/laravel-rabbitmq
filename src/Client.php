@@ -99,6 +99,7 @@ class Client
 
         $properties   = [];
         $consumerTag  = null;
+        $responseReceived = false;
 
         if ($isRpc) {
             [$callbackQueue, ,] = $channel->queue_declare('', false, true, true, true);
@@ -109,9 +110,10 @@ class Client
                     'reply_to'       => $callbackQueue,
             ];
 
-            $consumerTag = $channel->basic_consume($callbackQueue, '', false, true, false, false, function ($msg) use ($correlationId) {
+            $consumerTag = $channel->basic_consume($callbackQueue, '', false, true, false, false, function ($msg) use ($correlationId, &$responseReceived) {
                 if ($msg->get('correlation_id') === $correlationId) {
                     $this->response = json_decode($msg->body, true);
+                    $responseReceived = true;
                 }
             });
         }
@@ -125,7 +127,7 @@ class Client
 
         if ($isRpc) {
             try {
-                while (!$this->response) {
+                while (!$responseReceived) {
                     $channel->wait(null, false, $this->rpcTimeout);
                 }
             } catch (AMQPTimeoutException) {
