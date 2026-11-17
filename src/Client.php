@@ -238,11 +238,11 @@ class Client
      */
     private function declareQueueWithDeadLetter(string $queue): void
     {
-        if (isset($this->declaredQueues[$queue]) || $this->queueExists($queue)) {
-            $this->declaredQueues[$queue] = true;
+        if (isset($this->declaredQueues[$queue])) {
             return;
         }
 
+        $queueExists = $this->queueExists($queue);
         $channel         = $this->getChannel();
         $exchange        = config('rabbitmq.dead_letter_exchange', 'dlx');
         $deadLetterQueue = $this->deadLetterQueueName($queue);
@@ -250,6 +250,11 @@ class Client
         $channel->exchange_declare($exchange, 'direct', false, true, false);
         $channel->queue_declare($deadLetterQueue, false, true, false, false);
         $channel->queue_bind($deadLetterQueue, $exchange, $queue);
+
+        if ($queueExists) {
+            $this->declaredQueues[$queue] = true;
+            return;
+        }
 
         $channel->queue_declare($queue, false, true, false, false, false, new AMQPTable([
                 'x-dead-letter-exchange'    => $exchange,
