@@ -135,8 +135,6 @@ class Client
             } finally {
                 $channel->basic_cancel($consumerTag);
             }
-        } else {
-            echo "Message published to queue {$queue}\n";
         }
     }
 
